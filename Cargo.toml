@@ -1,0 +1,12 @@
+# The workspace of saldira/takeout: the takeout format and its verifier,
+# published from saldira's main repository (where this file is
+# `public/takeout/workspace.toml`). Cargo.lock comes from there too, pruned to
+# these two crates, so a release builds with exactly the versions saldira tests.
+[workspace]
+resolver = "2"
+members = ["crates/ledger-takeout", "crates/ledger-verify"]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

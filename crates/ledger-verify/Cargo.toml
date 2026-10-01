@@ -1,0 +1,23 @@
+[package]
+name = "ledger-verify"
+version = "1.0.0"
+edition = "2021"
+publish = false
+# OFF2-D10: the verifier is the one part of saldira a client runs without us,
+# so it is the one part that is open. Its own licence, beside it.
+license = "MIT"
+repository = "https://github.com/saldira/takeout"
+description = "Checks a saldira takeout: its signature, every file, the hash chain of its log, and that every journal entry balances."
+
+# `saldira-verify <bundle.zip> [--secrets <sidecar>] [--key <fingerprint>]`.
+# Deliberately small: the takeout format (`ledger-takeout`) and a zip reader,
+# nothing that talks to a network, nothing that knows a saldira exists.
+[[bin]]
+name = "saldira-verify"
+path = "src/main.rs"
+
+[dependencies]
+ledger-takeout = { path = "../ledger-takeout" }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+# `--json`: a report a script can parse, whatever the details contain.
+serde_json = "1"

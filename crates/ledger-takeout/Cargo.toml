@@ -1,0 +1,26 @@
+[package]
+name = "ledger-takeout"
+version = "1.0.0"
+edition = "2021"
+publish = false
+# OFF2-D10: the format is open with its verifier, under the same licence.
+license = "MIT"
+repository = "https://github.com/saldira/takeout"
+description = "The saldira takeout format: the log, its manifest, the secrets sidecar, the BagIt signature, and an independent check of the hash chain."
+
+# OFF2 — the takeout's format: the log a client takes with them, line by line,
+# the manifest that names what it holds, the secrets sidecar that travels
+# beside it (OFF2-D5), and an independent check of the hash chain inside it.
+#
+# No I/O and no database: rows come in, lines and verdicts go out. That keeps
+# the one implementation of "what a takeout is" usable by the gateway that
+# writes and restores it and by the open verifier that checks it (OFF2-D10),
+# which must not need a saldira to run.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+# OFF2-D4: the bundle's signature — ECDSA over P-256 with SHA-256, the scheme a
+# KMS `ECC_NIST_P256` key signs with and `openssl dgst -verify` checks. Pure Rust,
+# so the open verifier needs nothing else to check it.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pem", "std"] }

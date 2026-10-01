@@ -1,0 +1,18 @@
+# Tests on every push and pull request. The code is maintained in saldira's
+# main repository and published here; this run proves the published tree
+# builds and passes on its own.
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
+      - run: cargo test --locked --workspace
