@@ -12,7 +12,8 @@ archive without saldira:
 - **[keys/](keys/)**: saldira's public signing keys and their fingerprints.
 - **`saldira-verify`**: a small command-line tool that checks an archive.
   It covers the signature, every file, the hash chain of the log, every
-  stored document, and that every journal entry balances. It needs no
+  stored document, that every journal entry balances, and that every
+  book's trial balance recomputes from its journal. It needs no
   network and no saldira account.
 
 ## Install
@@ -46,6 +47,7 @@ ok   payload size  13323494.162 (bag says 13323494.162)
 ok   log           816 entries in 3 books, one chain each; 814 recomputed, 2 attested
 ok   documents     47 documents, each the file its digest names
 ok   journal       197 entries in 3 books, every one balanced in its functional currency
+ok   trial balance 214 accounts in 3 books, every balance as of 2026-11-23 the sum of its postings
 VERIFIED
 ```
 

@@ -6,8 +6,9 @@
 //! and `bag-info.txt`, the payload manifest over every file), **complete as
 //! signed** (nothing listed is missing, nothing present is unlisted), its
 //! **log is one unbroken chain** per book that matches its own manifest, every
-//! stored document **is the file its name says**, and every journal entry
-//! **balances to zero** in every currency.
+//! stored document **is the file its name says**, every journal entry
+//! **balances to zero** in every currency, and every book's **trial balance
+//! recomputes** from its journal's postings.
 //!
 //! What it cannot say alone is *who* signed. The answer names the key's
 //! fingerprint; compare it with the one saldira publishes, or pass it with
@@ -59,7 +60,7 @@ pub fn unzip(archive: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, String> {
         if f.is_dir() {
             continue;
         }
-        let name = f.name().to_string();
+        let name = f.name().map_err(|e| e.to_string())?.into_owned();
         let path = name.split_once('/').map_or(name.as_str(), |(_, rest)| rest).to_string();
         let mut buf = Vec::new();
         f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
@@ -259,6 +260,84 @@ fn verify_files(
             format!("does not balance: {unbalanced:?}")
         },
     );
+
+    verify_trial_balances(files, &info, r);
+}
+
+/// **OFF2-D10 (4)**, its second half: every book's `trial_balance.csv`
+/// recomputes from its `journal.csv`. The take reads the trial balance as of
+/// the day it was bagged, so the journal's lines up to `Bagging-Date` are what
+/// it must sum to — per account and currency, in exact decimal arithmetic.
+///
+/// A book whose journal or trial balance the take could not render is not a
+/// difference: `missing.csv` says so, and this check names it. Absent and
+/// **not** listed there is a silent gap, and fails.
+fn verify_trial_balances(
+    files: &BTreeMap<String, Vec<u8>>,
+    info: &BTreeMap<String, String>,
+    r: &mut Report,
+) {
+    const NAME: &str = "trial balance";
+    let book_of = |path: &str, table: &str| -> Option<String> {
+        path.strip_prefix("data/tables/")?
+            .strip_suffix(&format!("/{table}.csv"))
+            .filter(|b| !b.contains('/'))
+            .map(str::to_string)
+    };
+    let mut books: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for p in files.keys() {
+        books.extend(book_of(p, "journal").or_else(|| book_of(p, "trial_balance")));
+    }
+    if books.is_empty() {
+        return;
+    }
+    let Some(as_of) = info.get("Bagging-Date") else {
+        return r.push(NAME, false, "bag-info.txt names no Bagging-Date to read it as of");
+    };
+    let missing = text(files, "data/tables/missing.csv").unwrap_or_default();
+    let listed = |book: &str, report: &str| {
+        missing.lines().skip(1).any(|l| {
+            let f = record(l, ',');
+            f.first().map(String::as_str) == Some(book)
+                && f.get(1).map(String::as_str) == Some(report)
+        })
+    };
+    let (mut accounts, mut checked) = (0usize, 0usize);
+    let (mut differences, mut skipped) = (Vec::new(), Vec::new());
+    for book in &books {
+        let journal = text(files, &format!("data/tables/{book}/journal.csv"));
+        let stated = text(files, &format!("data/tables/{book}/trial_balance.csv"));
+        let (Some(journal), Some(stated)) = (journal.as_deref(), stated.as_deref()) else {
+            let absent = if journal.is_none() { "journal" } else { "trial_balance" };
+            if listed(book, absent) {
+                skipped.push(format!("{book} (no {absent}, as missing.csv says)"));
+            } else {
+                differences
+                    .push(format!("{book}: no {absent}.csv, and missing.csv does not say why"));
+            }
+            continue;
+        };
+        match trial_balance(journal, stated, as_of) {
+            Ok((n, bad)) => {
+                accounts += n;
+                checked += 1;
+                differences.extend(bad.into_iter().map(|d| format!("{book}: {d}")));
+            }
+            Err(e) => differences.push(format!("{book}: {e}")),
+        }
+    }
+    let detail = if !differences.is_empty() {
+        format!("does not recompute: {differences:?}")
+    } else {
+        let mut d = format!(
+            "{accounts} accounts in {checked} books, every balance as of {as_of} the sum of its postings"
+        );
+        if !skipped.is_empty() {
+            d.push_str(&format!("; not recomputed: {skipped:?}"));
+        }
+        d
+    };
+    r.push(NAME, differences.is_empty(), detail);
 }
 
 fn serde_manifest(text: &str) -> Result<ledger_takeout::Manifest, String> {
@@ -348,16 +427,12 @@ fn record(line: &str, delim: char) -> Vec<String> {
     out
 }
 
-/// Check a journal CSV: every entry nets to zero **in the functional
-/// currency**, the ledger's own invariant (ARCHITECTURE §Core invariants: an
-/// FX entry's legs are in several transaction currencies and balance only once
-/// converted). Read from `functional_amount`; a journal without that column is
-/// held to the stricter per-currency `debit`/`credit` instead. Answers how many
-/// entries it saw and the ones that do not balance.
-pub fn balance(csv: &str) -> Result<(usize, Vec<String>), String> {
+/// A CSV file as its header and its records. Records do not span lines unless
+/// a quoted cell (a narrative) does; those are joined back by quote parity
+/// before splitting. A byte-order mark is dropped, and the delimiter is `;`
+/// when the header has one and no `,`.
+fn table(csv: &str, what: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     let body = csv.trim_start_matches('\u{feff}');
-    // Records do not span lines in a journal unless a narrative does; join
-    // those back by quote parity before splitting.
     let mut rows: Vec<String> = Vec::new();
     let mut pending = String::new();
     for line in body.split('\n') {
@@ -371,29 +446,113 @@ pub fn balance(csv: &str) -> Result<(usize, Vec<String>), String> {
         }
     }
     let mut rows = rows.into_iter().filter(|l| !l.is_empty());
-    let header = rows.next().ok_or("an empty journal")?;
+    let header = rows.next().ok_or(format!("an empty {what}"))?;
     let delim = if header.contains(';') && !header.contains(',') { ';' } else { ',' };
     let cols = record(&header, delim);
-    let at = |name: &str| cols.iter().position(|c| c == name).ok_or(format!("no `{name}` column"));
+    Ok((cols, rows.map(|r| record(&r, delim)).collect()))
+}
+
+fn column(cols: &[String], name: &str) -> Result<usize, String> {
+    cols.iter().position(|c| c == name).ok_or(format!("no `{name}` column"))
+}
+
+fn cell(row: &[String], i: usize) -> &str {
+    row.get(i).map(String::as_str).unwrap_or("")
+}
+
+/// Check a journal CSV: every entry nets to zero **in the functional
+/// currency**, the ledger's own invariant (ARCHITECTURE §Core invariants: an
+/// FX entry's legs are in several transaction currencies and balance only once
+/// converted). Read from `functional_amount`; a journal without that column is
+/// held to the stricter per-currency `debit`/`credit` instead. Answers how many
+/// entries it saw and the ones that do not balance.
+pub fn balance(csv: &str) -> Result<(usize, Vec<String>), String> {
+    let (cols, rows) = table(csv, "journal")?;
+    let at = |name: &str| column(&cols, name);
     let id = at("entry_id")?;
     let functional = at("functional_amount").and_then(|a| Ok((a, at("functional_currency")?)));
     let mut sums: BTreeMap<(String, String), i128> = BTreeMap::new();
-    for row in rows {
-        let f = record(&row, delim);
-        let get = |i: usize| f.get(i).map(String::as_str).unwrap_or("");
+    for f in &rows {
         let (net, ccy) = match &functional {
-            Ok((amount, ccy)) => (millionths(get(*amount))?, get(*ccy)),
+            Ok((amount, ccy)) => (millionths(cell(f, *amount))?, cell(f, *ccy)),
             Err(_) => {
                 let (debit, credit, ccy) = (at("debit")?, at("credit")?, at("currency")?);
-                (millionths(get(debit))? - millionths(get(credit))?, get(ccy))
+                (millionths(cell(f, debit))? - millionths(cell(f, credit))?, cell(f, ccy))
             }
         };
-        *sums.entry((get(id).to_string(), ccy.to_string())).or_default() += net;
+        *sums.entry((cell(f, id).to_string(), ccy.to_string())).or_default() += net;
     }
     let entries = sums.keys().map(|(e, _)| e).collect::<std::collections::BTreeSet<_>>().len();
     let bad =
         sums.into_iter().filter(|(_, v)| *v != 0).map(|((e, c), _)| format!("{e} ({c})")).collect();
     Ok((entries, bad))
+}
+
+/// Recompute a book's trial balance from its journal and hold the stated one
+/// to it. `journal` is `journal.csv`, `stated` the book's `trial_balance.csv`,
+/// `as_of` the date (`YYYY-MM-DD`) the trial balance was read as of: a journal
+/// line booked after it is not in it.
+///
+/// Per account number and currency, the stated `balance` must equal the sum of
+/// that account's `functional_amount`s in that `functional_currency`, exactly.
+/// An account the trial balance lists with no postings must stand at zero, and
+/// an account with postings must be listed. Answers how many accounts it
+/// compared and, for each that differs, the account, the currency and both
+/// figures.
+pub fn trial_balance(
+    journal: &str,
+    stated: &str,
+    as_of: &str,
+) -> Result<(usize, Vec<String>), String> {
+    let (jc, jrows) = table(journal, "journal")?;
+    let (account, date) = (column(&jc, "account_number")?, column(&jc, "booking_date")?);
+    let (amount, ccy) = (column(&jc, "functional_amount")?, column(&jc, "functional_currency")?);
+    let mut made: BTreeMap<(String, String), i128> = BTreeMap::new();
+    for f in jrows.iter().filter(|f| cell(f, date) <= as_of) {
+        let key = (cell(f, account).to_string(), cell(f, ccy).to_string());
+        *made.entry(key).or_default() += millionths(cell(f, amount))?;
+    }
+    let (tc, trows) = table(stated, "trial balance")?;
+    let (number, balance, currency) =
+        (column(&tc, "number")?, column(&tc, "balance")?, column(&tc, "currency")?);
+    let mut says: BTreeMap<(String, String), i128> = BTreeMap::new();
+    for f in &trows {
+        let key = (cell(f, number).to_string(), cell(f, currency).to_string());
+        *says.entry(key).or_default() += millionths(cell(f, balance))?;
+    }
+    let mut bad = Vec::new();
+    for (key, stated) in &says {
+        let sum = made.get(key).copied().unwrap_or(0);
+        if *stated != sum {
+            bad.push(format!(
+                "account {} ({}): the trial balance says {}, its postings make {}",
+                key.0,
+                key.1,
+                decimal(*stated),
+                decimal(sum)
+            ));
+        }
+    }
+    for (key, sum) in &made {
+        if *sum != 0 && !says.contains_key(key) {
+            bad.push(format!(
+                "account {} ({}): not in the trial balance, its postings make {}",
+                key.0,
+                key.1,
+                decimal(*sum)
+            ));
+        }
+    }
+    Ok((says.len(), bad))
+}
+
+/// Millionths back to a decimal string, with at least two places.
+fn decimal(m: i128) -> String {
+    let sign = if m < 0 { "-" } else { "" };
+    let (int, frac) = (m.unsigned_abs() / 1_000_000, m.unsigned_abs() % 1_000_000);
+    let frac = format!("{frac:06}");
+    let frac = frac.trim_end_matches('0');
+    format!("{sign}{int}.{frac:0<2}")
 }
 
 #[cfg(test)]
@@ -423,6 +582,120 @@ mod tests {
                   7;100.00;;EUR;95.50;CHF\n7;;95.50;CHF;-95.50;CHF\n\
                   8;10;;CHF;10;CHF\n8;;9;CHF;-9;CHF\n";
         assert_eq!(balance(fx).unwrap(), (2, vec!["8 (CHF)".to_string()]));
+    }
+
+    /// A book in CHF with one EUR invoice, one entry after the take's day, and
+    /// an account nothing was posted to — the shapes the take writes.
+    const JOURNAL: &str = "\u{feff}entry_id,booking_date,value_date,narrative,account_number,\
+        account_name,debit,credit,currency,functional_amount,functional_currency\r\n\
+        1,2026-01-05,,\"Rechnung 1, Jan\",1100,Debitoren,100.00,,EUR,95.50,CHF\r\n\
+        1,2026-01-05,,\"Rechnung 1, Jan\",3200,Ertrag,,95.50,CHF,-95.50,CHF\r\n\
+        2,2026-02-01,,\"Zahlung\nmit Zeilenumbruch\",1020,Bank,40.25,,CHF,40.25,CHF\r\n\
+        2,2026-02-01,,\"Zahlung\nmit Zeilenumbruch\",1100,Debitoren,,40.25,CHF,-40.25,CHF\r\n\
+        3,2026-12-31,,Später,1020,Bank,1.00,,CHF,1.00,CHF\r\n\
+        3,2026-12-31,,Später,3200,Ertrag,,1.00,CHF,-1.00,CHF\r\n";
+    const STATED: &str = "\u{feff}number,name,balance,currency\r\n\
+        1020,Bank,40.25,CHF\r\n1100,Debitoren,55.25,CHF\r\n\
+        3200,Ertrag,-95.5,CHF\r\n4000,Material,0.00,CHF\r\n";
+
+    #[test]
+    fn a_trial_balance_recomputes_from_the_postings_as_of_its_day() {
+        assert_eq!(trial_balance(JOURNAL, STATED, "2026-06-30").unwrap(), (4, vec![]));
+        // Read a day later than it was taken, the December entry belongs in it.
+        let (_, bad) = trial_balance(JOURNAL, STATED, "2026-12-31").unwrap();
+        assert_eq!(
+            bad,
+            vec![
+                "account 1020 (CHF): the trial balance says 40.25, its postings make 41.25",
+                "account 3200 (CHF): the trial balance says -95.50, its postings make -96.50",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tampered_figure_names_its_account_and_both_figures() {
+        let tampered = STATED.replace("1100,Debitoren,55.25", "1100,Debitoren,55.20");
+        let (n, bad) = trial_balance(JOURNAL, &tampered, "2026-06-30").unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(
+            bad,
+            vec!["account 1100 (CHF): the trial balance says 55.20, its postings make 55.25"]
+        );
+        // An account dropped from the trial balance is named too, and a
+        // zero balance on an account with no postings is not a difference.
+        let dropped = STATED.replace("1020,Bank,40.25,CHF\r\n", "");
+        let (_, bad) = trial_balance(JOURNAL, &dropped, "2026-06-30").unwrap();
+        assert_eq!(
+            bad,
+            vec!["account 1020 (CHF): not in the trial balance, its postings make 40.25"]
+        );
+        // A figure in another currency than the one the book posts in differs.
+        let ccy = STATED.replace("1020,Bank,40.25,CHF", "1020,Bank,40.25,EUR");
+        let (_, bad) = trial_balance(JOURNAL, &ccy, "2026-06-30").unwrap();
+        assert_eq!(bad.len(), 2, "{bad:?}");
+        assert!(trial_balance(JOURNAL, "number,balance\n", "2026-06-30").is_err());
+    }
+
+    #[test]
+    fn every_book_is_recomputed_and_a_gap_must_be_explained() {
+        let files = |entries: &[(&str, &str)]| -> BTreeMap<String, Vec<u8>> {
+            entries.iter().map(|(p, b)| (p.to_string(), b.as_bytes().to_vec())).collect()
+        };
+        let info: BTreeMap<String, String> =
+            [("Bagging-Date".to_string(), "2026-06-30".to_string())].into();
+        let run = |f: &BTreeMap<String, Vec<u8>>, info: &BTreeMap<String, String>| {
+            let mut r = Report::default();
+            verify_trial_balances(f, info, &mut r);
+            r.checks.pop().unwrap()
+        };
+        let mut bundle = files(&[
+            ("data/tables/main/journal.csv", JOURNAL),
+            ("data/tables/main/trial_balance.csv", STATED),
+            ("data/tables/missing.csv", "book,report,reason\n"),
+        ]);
+        let c = run(&bundle, &info);
+        assert!(c.ok, "{c:?}");
+        assert_eq!(
+            c.detail,
+            "4 accounts in 1 books, every balance as of 2026-06-30 the sum of its postings"
+        );
+
+        // A second book whose journal could not render: said, not failed.
+        bundle.insert("data/tables/b2/trial_balance.csv".into(), STATED.as_bytes().to_vec());
+        let c = run(&bundle, &info);
+        assert!(!c.ok && c.detail.contains("b2: no journal.csv"), "{c:?}");
+        bundle.insert(
+            "data/tables/missing.csv".into(),
+            b"book,report,reason\nb2,journal,over the row cap\n".to_vec(),
+        );
+        let c = run(&bundle, &info);
+        assert!(c.ok && c.detail.contains("b2 (no journal, as missing.csv says)"), "{c:?}");
+
+        // A tampered figure fails the check and says where.
+        bundle.insert(
+            "data/tables/main/trial_balance.csv".into(),
+            STATED.replace("3200,Ertrag,-95.5", "3200,Ertrag,-95.6").into_bytes(),
+        );
+        let c = run(&bundle, &info);
+        assert!(!c.ok, "{c:?}");
+        assert!(
+            c.detail.contains(
+                "main: account 3200 (CHF): the trial balance says -95.60, its postings make -95.50"
+            ),
+            "{c:?}"
+        );
+
+        // Without the day it was taken, it cannot be read as of anything.
+        let c = run(&bundle, &BTreeMap::new());
+        assert!(!c.ok && c.detail.contains("Bagging-Date"), "{c:?}");
+    }
+
+    #[test]
+    fn decimals_print_exactly() {
+        assert_eq!(decimal(0), "0.00");
+        assert_eq!(decimal(-95_500_000), "-95.50");
+        assert_eq!(decimal(1_234_567), "1.234567");
+        assert_eq!(decimal(-50_000), "-0.05");
     }
 
     #[test]

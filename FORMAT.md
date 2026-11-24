@@ -205,6 +205,12 @@ The bank register is one file per bank account,
 the book's `functional_currency`. **Every entry balances**: its
 `functional_amount`s sum to zero.
 
+`tables/<book>/trial_balance.csv` is every account's balance (`balance`, in
+`currency`, positive is debit) as of the archive's `Bagging-Date`. **It
+recomputes from the journal**: for each account `number` and currency, it is
+the sum of that account's `functional_amount`s on journal lines booked on or
+before that date.
+
 `tables/missing.csv` (`book,report,reason`) lists anything the archive
 should have held and could not produce. A table that is not there is listed
 there, never silently absent.
@@ -236,6 +242,7 @@ saldira-verify <archive.zip> [--secrets <secrets.jsonl>] [--key <fingerprint>] [
 | `secrets` | with `--secrets`: the file is the one the bag names, and with it every line recomputes |
 | `documents` | every original is the file its name's digest says |
 | `journal` | every journal entry balances in its functional currency |
+| `trial balance` | every book's trial balance is, account by account, the sum of its journal lines up to `Bagging-Date`; a difference names the book, the account and both figures. A book whose journal or trial balance `tables/missing.csv` lists is named, not recomputed |
 
 The exit status is 0 when every check passes, 1 when one fails, and 2 when
 the command line or a file could not be read.

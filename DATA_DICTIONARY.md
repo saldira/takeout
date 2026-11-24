@@ -74,7 +74,8 @@ strings with a dot; dates are ISO 8601 (YYYY-MM-DD); an empty cell is no value.
 | `party_id` | Party id / Partner-ID | Int |
 | `due_date` | Due date / Fällig am | Date |
 | `days_overdue` | Days overdue / Tage überfällig | Int |
-| `bucket` | Bucket / Fälligkeitsband | Int |
+| `bucket_band` | Bucket / Fälligkeitsband | Text |
+| `bucket` | Bucket index / Bandnummer | Int |
 | `remaining` | Remaining / Offen | Decimal |
 | `currency` | Currency / Währung | Text |
 
@@ -88,7 +89,8 @@ strings with a dot; dates are ISO 8601 (YYYY-MM-DD); an empty cell is no value.
 | `party_id` | Party id / Partner-ID | Int |
 | `due_date` | Due date / Fällig am | Date |
 | `days_overdue` | Days overdue / Tage überfällig | Int |
-| `bucket` | Bucket / Fälligkeitsband | Int |
+| `bucket_band` | Bucket / Fälligkeitsband | Text |
+| `bucket` | Bucket index / Bandnummer | Int |
 | `remaining` | Remaining / Offen | Decimal |
 | `currency` | Currency / Währung | Text |
 
@@ -150,6 +152,7 @@ strings with a dot; dates are ISO 8601 (YYYY-MM-DD); an empty cell is no value.
 | `reversed` | Reversed / Storniert | Bool |
 | `reason` | Reason / Grund | Text |
 | `note` | Note / Notiz | Text |
+| `counterparty_name` | Counterparty name / Name der Gegenpartei | Text |
 | `counterparty` | Counterparty / Gegenpartei | Text |
 
 ## `mwst_form` — VAT return / MWST-Abrechnung
@@ -190,7 +193,8 @@ strings with a dot; dates are ISO 8601 (YYYY-MM-DD); an empty cell is no value.
 |---|---|---|
 | `id` | Log no. / Protokoll-Nr. | Int |
 | `recorded_at` | Recorded at / Zeitpunkt | Text |
-| `principal` | Person / Person | Text |
+| `person` | Person / Person | Text |
+| `principal` | Person key / Personen-Schlüssel | Text |
 | `book` | Book / Buch | Text |
 | `category` | Category / Bereich | Text |
 | `method` | Action / Vorgang | Text |
@@ -284,7 +288,8 @@ strings with a dot; dates are ISO 8601 (YYYY-MM-DD); an empty cell is no value.
 
 | column | meaning | type |
 |---|---|---|
-| `principal` | Principal / Person | Text |
+| `person` | Person / Person | Text |
+| `principal` | Person key / Personen-Schlüssel | Text |
 | `roles` | Roles / Rollen | Words |
 | `sponsor` | Sponsor / Vergeben von | Text |
 | `agent` | Agent / Agent | Bool |
