@@ -199,6 +199,7 @@ strings with a dot; dates are ISO 8601 (YYYY-MM-DD); an empty cell is no value.
 | `category` | Category / Bereich | Text |
 | `method` | Action / Vorgang | Text |
 | `payload` | Content / Inhalt | Text |
+| `sign_off_evidence` | Signed off over / Visiert über | Text |
 | `request_id` | Request id / Anfrage-ID | Text |
 
 ## `items` — Items / Artikel

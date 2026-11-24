@@ -1,6 +1,6 @@
 [package]
 name = "ledger-verify"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 publish = false
 # OFF2-D10: the verifier is the one part of saldira a client runs without us,

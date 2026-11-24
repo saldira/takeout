@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 — 2026-11-24
+
+No change to `saldira-verify` or the format: 1.1.0's release could not be
+built for macOS, because GitHub no longer runs its `macos-14` image, so v1.1.0
+has no binaries. 1.1.1 is the same code, built on `macos-15` for all five
+platforms.
+
 ## 1.1.0 — 2026-11-23
 
 `saldira-verify` recomputes every book's trial balance from its journal: per

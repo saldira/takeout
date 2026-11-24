@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "ledger-verify"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "ledger-takeout",
  "serde_json",
